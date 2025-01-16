@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -11,16 +12,20 @@ from typing import Callable, List, Optional, Union
 
 from loguru import logger
 from ruamel import yaml
-
+from ruamel.yaml.comments import CommentedSeq
 from module.cloud_drive import CloudDrive, CloudDriveConfig
 from module.filter import Filter
+from utils.format_addon import add_commented_map_to_seq
 from module.language import Language, set_language
 from utils.format import replace_date_time, validate_title
 from utils.meta_data import MetaData
 
+from module import sqlmodel
+
 _yaml = yaml.YAML()
 # pylint: disable = R0902
 
+db = sqlmodel.Downloaded()
 
 class DownloadStatus(Enum):
     """Download status"""
@@ -371,7 +376,8 @@ class Application:
 
         self.chat_download_config: dict = {}
 
-        self.save_path = os.path.join(os.path.abspath("."), "downloads")
+        #self.save_path = os.path.join(os.path.abspath("."), "downloads")
+        self.save_path: dict = {}
         self.temp_save_path = os.path.join(os.path.abspath("."), "temp")
         self.api_id: str = ""
         self.api_hash: str = ""
@@ -379,13 +385,13 @@ class Application:
         self._chat_id: str = ""
         self.media_types: List[str] = []
         self.file_formats: dict = {}
-        self.proxy: dict = {}
+        self.proxies: List[dict] = []
         self.restart_program = False
         self.config: dict = {}
         self.app_data: dict = {}
-        self.file_path_prefix: List[str] = ["chat_title", "media_datetime"]
+        self.file_path_prefix: List[str] = []
         self.file_name_prefix: List[str] = ["message_id", "file_name"]
-        self.file_name_prefix_split: str = " - "
+        self.file_name_prefix_split: str = ""
         self.log_file_path = os.path.join(os.path.abspath("."), "log")
         self.session_file_path = os.path.join(os.path.abspath("."), "sessions")
         self.cloud_drive_config = CloudDriveConfig()
@@ -405,9 +411,10 @@ class Application:
         self.allowed_user_ids: yaml.comments.CommentedSeq = yaml.comments.CommentedSeq(
             []
         )
-        self.date_format: str = "%Y_%m"
+        self.date_format: str = "%Y-%m"
         self.drop_no_audio_video: bool = False
         self.enable_download_txt: bool = False
+        self.if_retry: bool = True
 
         self.forward_limit_call = LimitCall(max_limit_call_times=33)
 
@@ -437,6 +444,7 @@ class Application:
             self.save_path = _config["save_path"]
 
         self.api_id = _config["api_id"]
+        self.session_file_path = os.path.join(os.path.abspath("."), "sessions", str(self.api_id))
         self.api_hash = _config["api_hash"]
         self.bot_token = _config.get("bot_token", "")
 
@@ -445,15 +453,21 @@ class Application:
 
         self.hide_file_name = _config.get("hide_file_name", False)
 
+        self.if_retry = _config.get("if_retry", True)
+
         # option
-        if _config.get("proxy"):
-            self.proxy = _config["proxy"]
+        if _config.get("proxies"):
+            for proxy in _config["proxies"]:
+                self.proxies.append(proxy)
         if _config.get("restart_program"):
             self.restart_program = _config["restart_program"]
         if _config.get("file_path_prefix"):
             self.file_path_prefix = _config["file_path_prefix"]
         if _config.get("file_name_prefix"):
             self.file_name_prefix = _config["file_name_prefix"]
+        if _config.get("temp_save_path"):
+            self.temp_save_path = _config["temp_save_path"]
+
 
         if _config.get("upload_drive"):
             upload_drive_config = _config["upload_drive"]
@@ -564,17 +578,11 @@ class Application:
             for item in chat:
                 if "chat_id" in item:
                     self.chat_download_config[item["chat_id"]] = ChatDownloadConfig()
-                    self.chat_download_config[
-                        item["chat_id"]
-                    ].last_read_message_id = item.get("last_read_message_id", 0)
-                    self.chat_download_config[
-                        item["chat_id"]
-                    ].download_filter = item.get("download_filter", "")
-                    self.chat_download_config[
-                        item["chat_id"]
-                    ].upload_telegram_chat_id = item.get(
-                        "upload_telegram_chat_id", None
-                    )
+                    last_read_message_id = item.get("last_read_message_id", 0)
+                    self.chat_download_config[item["chat_id"]].last_read_message_id = last_read_message_id
+                    self.chat_download_config[item["chat_id"]].download_filter = item.get("download_filter", "")
+                    self.chat_download_config[item["chat_id"]].upload_telegram_chat_id = item.get("upload_telegram_chat_id", None)
+                    self.chat_download_config[item["chat_id"]].group = item.get("group")
         elif _config.get("chat_id"):
             # Compatible with lower versions
             self._chat_id = _config["chat_id"]
@@ -712,14 +720,12 @@ class Application:
             file save path prefix
         """
 
-        res: str = self.save_path
-        for prefix in self.file_path_prefix:
-            if prefix == "chat_title":
-                res = os.path.join(res, chat_title)
-            elif prefix == "media_datetime":
-                res = os.path.join(res, media_datetime)
-            elif prefix == "media_type":
-                res = os.path.join(res, media_type)
+        try:
+            res = self.save_path.get(media_type)
+        except Exception as e:
+            logger.info(e)
+            pass
+
         return res
 
     def get_file_name(
@@ -749,7 +755,7 @@ class Application:
             if prefix == "message_id":
                 if res != "":
                     res += self.file_name_prefix_split
-                res += f"{message_id}"
+                res += f"[{message_id}]"
             elif prefix == "file_name" and file_name:
                 if res != "":
                     res += self.file_name_prefix_split
@@ -820,26 +826,29 @@ class Application:
         for key, value in self.chat_download_config.items():
             # pylint: disable = W0201
             unfinished_ids = set(value.ids_to_retry)
-
-            for it in value.ids_to_retry:
-                if  value.node.download_status.get(
-                    it, DownloadStatus.FailedDownload
-                ) in [DownloadStatus.SuccessDownload, DownloadStatus.SkipDownload]:
-                    unfinished_ids.remove(it)
+            max_try = 0
 
             for _idx, _value in value.node.download_status.items():
-                if DownloadStatus.SuccessDownload != _value and DownloadStatus.SkipDownload != _value:
+                if _idx > max_try:
+                    max_try = _idx  # 记录最后一个下载id
+                if  DownloadStatus.SuccessDownload == _value or DownloadStatus.SkipDownload == _value: #成功或需要跳过的从老retry列表删除
+                    if _idx in unfinished_ids:
+                        unfinished_ids.remove(_idx)
+
+                elif DownloadStatus.Downloading == _value or DownloadStatus.FailedDownload == _value:  # 正在下载或下载失败的添加到retry列表
                     unfinished_ids.add(_idx)
 
             self.chat_download_config[key].ids_to_retry = list(unfinished_ids)
 
-            if idx >= len(self.app_data["chat"]):
+
+
+            if idx >= len(self.app_data.get("chat")):
                 self.app_data["chat"].append({})
 
-            if value.finish_task:
-                self.config["chat"][idx]["last_read_message_id"] = (
-                    value.last_read_message_id + 1
-                )
+            try:
+                self.config["chat"][idx]["last_read_message_id"] = max(self.config["chat"][idx]["last_read_message_id"],max_try)
+            except:
+                pass
 
             self.app_data["chat"][idx]["chat_id"] = key
             self.app_data["chat"][idx]["ids_to_retry"] = value.ids_to_retry
@@ -867,12 +876,20 @@ class Application:
         # self.app_data["already_download_ids"] = list(self.already_download_ids_set)
 
         if immediate:
-            with open(self.config_file, "w", encoding="utf-8") as yaml_file:
-                _yaml.dump(self.config, yaml_file)
+            bak_config_file = f"{self.config_file}.bak"
+            shutil.copyfile(self.config_file, bak_config_file)
+            try:
+                with open(self.config_file, "w", encoding="utf-8") as yaml_file:
+                    _yaml.dump(self.config, yaml_file)
+            except Exception as e:
+                logger.warning(f"config file save error: {e}")
+                # 如果写入失败，将 a.bak 复制回 a
+                shutil.copyfile(bak_config_file, self.config_file)
+                logger.warning(f"config.bak file is recovered")
 
-        if immediate:
-            with open(self.app_data_file, "w", encoding="utf-8") as yaml_file:
-                _yaml.dump(self.app_data, yaml_file)
+            # 写到一半出问题会清空配置文件 更改为先写入临时文件 没问题再改名
+
+
 
     def set_language(self, language: Language):
         """Set Language"""
@@ -888,16 +905,36 @@ class Application:
             if config:
                 self.config = config
                 self.assign_config(self.config)
+        if self.config.get('if_retry'):
+            retrys = db.load_retry_msg_from_db()
+            if retrys:
+                for chat in retrys:
+                    if  chat.get('chat_username') and chat.get('chat_username') in self.chat_download_config:
+                        chat_id_aka = chat.get('chat_username')
+                    elif chat.get('chat_id') and chat.get('chat_id') in self.chat_download_config:
+                        chat_id_aka = chat.get('chat_id')
+                    else:
+                        chat_id_aka = chat.get('chat_id')
 
-        if os.path.exists(os.path.join(os.path.abspath("."), self.app_data_file)):
-            with open(
-                os.path.join(os.path.abspath("."), self.app_data_file),
-                encoding="utf-8",
-            ) as f:
-                app_data = _yaml.load(f.read())
-                if app_data:
-                    self.app_data = app_data
-                    self.assign_app_data(self.app_data)
+                        self.chat_download_config[chat_id_aka] = ChatDownloadConfig()
+                        self.chat_download_config[chat_id_aka].last_read_message_id = 9999999
+                        self.chat_download_config[chat_id_aka].download_filter = ''
+                        self.chat_download_config[chat_id_aka].upload_telegram_chat_id = None
+                        self.chat_download_config[chat_id_aka].group = None
+
+                        map_data = {'chat_id': chat_id_aka,
+                                    'last_read_message_id': self.chat_download_config[chat_id_aka].last_read_message_id,
+                                    'download_filter': self.chat_download_config[chat_id_aka].download_filter}
+                        add_commented_map_to_seq(self.config['chat'], map_data)
+
+                    self.chat_download_config[chat_id_aka].ids_to_retry = chat.get('ids_to_retry', [])
+                    for it_str in self.chat_download_config[chat_id_aka].ids_to_retry:
+                        it = int(it_str)
+                        self.chat_download_config[chat_id_aka].ids_to_retry_dict[
+                            it
+                        ] = True
+
+        return
 
     def pre_run(self):
         """before run application do"""

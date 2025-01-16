@@ -342,6 +342,13 @@ class BaseFilter:
 class Filter:
     """filter for telegram download"""
 
+    # Compile the regular expression once
+    japanese_pattern = r'[\u3040-\u30ff]'
+    korean_pattern = r'[\uac00-\ud7a3]'
+    specific_names_pattern = r'(日南|真琴|天知遥|秋水|养猪妹|利香|幽灵妹|柚木|音音|惠子|梦冬|汀宝|筱安安|KU100|芝恩|轻语的神|阿花yoyo|耳边私语|阿茉|夏姗姗|芦荟胶|maltsugar|桥桥|被窝限定|柴胡|大战僵尸|鹿之之|织织宝|3D|录播|疗愈|陈安安|oTo)'
+    combined_pattern = f'({japanese_pattern}|{korean_pattern}|{specific_names_pattern})'
+    pattern = re.compile(combined_pattern)
+
     def __init__(self):
         self.filter = BaseFilter()
 
@@ -350,16 +357,47 @@ class Filter:
         self.filter.reset()
         self.filter.names = meta_data.data()
 
+    def has_japanese_or_korean_chars(self, a: str) -> bool:
+        if not isinstance(a, str):
+            raise ValueError("Input must be a string")
+
+        if not a:
+            return False
+
+        # Replace 'の' with '的'
+        a = a.replace('の', '的')
+
+        try:
+            # Search for the combined pattern
+            result = bool(self.pattern.search(a))
+            return result
+        except Exception as e:
+            raise ValueError("Input must be a string")
+
+
     def set_debug(self, debug: bool):
         """Set Filter Debug Model"""
         self.filter.debug = debug
 
     def exec(self, filter_str: str) -> bool:
         """Exec filter str"""
-
+        no_jap_kor = False
+        if 'no_jap_kor' in filter_str:
+            no_jap_kor = True
+            filter_str = filter_str.replace('no_jap_kor', '').strip()
         if self.filter.names:
             res = self.filter.exec(filter_str)
             if isinstance(res, bool):
+                if res == True:
+                    if no_jap_kor and (self.filter.names.get('media_type') == 'audio' or self.filter.names.get('media_type') == 'video'):
+                        # 音频或视频是日语或韩语时 filter里有no_jap_kor标识的 则不下载文件。
+                        if self.has_japanese_or_korean_chars(self.filter.names.get('media_file_name')):
+                            #logger.info(f"{self.filter.names.get('media_file_name')} is jap or kor! passed. \n",exc_info=True,)
+                            return False
+                        else:
+                            if self.has_japanese_or_korean_chars(self.filter.names.get('message_caption')):
+                                #logger.info(f"{self.filter.names.get('message_caption')} is jap or kor! passed. \n",exc_info=True,)
+                                return False
                 return res
             return False
         raise ValueError("meta data cannot be empty!")
