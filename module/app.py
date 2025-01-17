@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import random
 import shutil
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -385,7 +386,7 @@ class Application:
         self._chat_id: str = ""
         self.media_types: List[str] = []
         self.file_formats: dict = {}
-        self.proxies: List[dict] = []
+        self.proxy: dict = {}
         self.restart_program = False
         self.config: dict = {}
         self.app_data: dict = {}
@@ -444,7 +445,7 @@ class Application:
             self.save_path = _config["save_path"]
 
         self.api_id = _config["api_id"]
-        self.session_file_path = os.path.join(os.path.abspath("."), "sessions", str(self.api_id))
+        self.session_file_path = os.path.join(_config["session_file_path"], str(self.api_id))
         self.api_hash = _config["api_hash"]
         self.bot_token = _config.get("bot_token", "")
 
@@ -456,9 +457,8 @@ class Application:
         self.if_retry = _config.get("if_retry", True)
 
         # option
-        if _config.get("proxies"):
-            for proxy in _config["proxies"]:
-                self.proxies.append(proxy)
+        if _config.get("proxy"):
+            self.proxy = random.choice(_config.get("proxy"))
         if _config.get("restart_program"):
             self.restart_program = _config["restart_program"]
         if _config.get("file_path_prefix"):

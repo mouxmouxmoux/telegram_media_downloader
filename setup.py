@@ -8,8 +8,8 @@ setup(
     author="tangyoha",
     author_email="tangyoha@outlook.com",
     description="A simple script to download media from telegram",
-    url="https://github.com/tangyoha/telegram_media_downloader",
-    download_url="https://github.com/tangyoha/telegram_media_downloader/releases/latest",
+    url="https://github.com/mouxmouxmoux/telegram_media_downloader",
+    download_url="https://github.com/mouxmouxmoux/telegram_media_downloader/releases/latest",
     py_modules=["media_downloader"],
     classifiers=[
         "Development Status :: 5 - Production/Stable",
@@ -34,9 +34,9 @@ setup(
         "Topic :: Software Development :: Libraries :: Python Modules",
     ],
     project_urls={
-        "Tracker": "https://github.com/tangyoha/telegram_media_downloader/issues",
-        "Community": "https://t.me/TeegramMediaDownload",
-        "Source": "https://github.com/tangyoha/telegram_media_downloader",
+        "Tracker": "https://github.com/mouxmouxmoux/telegram_media_downloader/issues",
+        "Community": "https://t.me/Mouxwu",
+        "Source": "https://github.com/mouxmouxmoux/telegram_media_downloader",
     },
     python_requires="~=3.7",
 )

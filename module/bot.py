@@ -139,15 +139,13 @@ class DownloadBot:
         download_chat_task: Callable,
     ):
         """Start bot"""
-        if app.proxies:
-            proxy = app.proxies[0]
         self.bot = pyrogram.Client(
             app.application_name + "_bot",
             api_hash=app.api_hash,
             api_id=app.api_id,
             bot_token=app.bot_token,
             workdir=app.session_file_path,
-            proxy=proxy,
+            proxy=app.proxy,
         )
 
         # 命令列表
